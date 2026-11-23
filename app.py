@@ -30,16 +30,23 @@ FRONTEND = __import__('zlib').decompress(__import__('base64').b64decode('eNrsvWm
 
 # Readable source for the water activity inside the embedded component.
 WATER_ACTIVITY_HTML = r"""<style>
-.diagram.water-diagram { height: clamp(220px, 66vw, 284px); touch-action: pan-y; }
+.diagram.water-diagram { height: clamp(220px, 66vw, 284px); touch-action: none; user-select: none; cursor: grab; }
+.diagram.water-diagram.rotating { cursor: grabbing; }
 .water-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; margin: 4px 0 8px; }
-.water-tools button { min-height: 44px; }
+.water-guide { flex-basis: 100%; margin: 0; }
 .water-lengths { flex: 1 1 174px; font-size: .88rem; line-height: 1.45; }
+.water-rotation { flex: 1 0 100%; display: flex; align-items: center; gap: 12px; font-size: .9rem; font-weight: 700; }
+.water-rotation input { flex: 1; min-width: 0; width: auto; height: 44px; margin: 0; accent-color: #147565; }
 </style>
 <script>
 function waterControls(q) {
  const {a,b,c,reverse}=q.params;
  const lengths=reverse?`A：${a} cm　B：？　C：${c} cm`:`A：${a}列　B：${b}列`;
- return `<div class="water-tools"><button type="button" id="waterTurn">水をうつす</button><span class="water-lengths">${lengths}</span><span id="waterStatus" class="quiet" role="status"></span></div>`;
+ return `<div class="water-tools">
+  <p class="quiet water-guide" id="waterGuide">図をつかんで回そう</p>
+  <label class="water-rotation">図をまわす<input type="range" id="waterRotation" min="-180" max="180" step="1" value="0"></label>
+  <span class="water-lengths">${lengths}</span><span id="waterStatus" class="quiet" role="status"></span>
+ </div>`;
 }
 
 function waterBoard({a,b}) {
@@ -107,7 +114,7 @@ function drawWaterBoard(q,svg) {
  const coords=points=>points.map(pt=>pt.map(n=>n.toFixed(2)).join(',')).join(' ');
  const polygon=(points,style)=>`<polygon points="${coords(points)}" ${style}/>`;
  const line=(u,v)=>`<line x1="${u[0]}" y1="${u[1]}" x2="${v[0]}" y2="${v[1]}"/>`;
- const fractions=waterFractions(p,progress);
+ const fractions=waterFractions(p,Math.abs(progress));
  svg.classList.add('water-diagram');
  svg.setAttribute('viewBox','0 0 320 270');
  let labels='';
@@ -135,37 +142,259 @@ function drawWaterBoard(q,svg) {
 }
 
 function setupWaterControls(q) {
- const button=$('#waterTurn'),status=$('#waterStatus');
- if(!button||!status)return;
+ const svg=$('#diagram'),slider=$('#waterRotation'),status=$('#waterStatus');
  const finished=q.params.reverse?'AとBがぴったり満杯':'Cがぴったり満杯';
- if(activity.waterProgress===1){
-  button.dataset.waterTarget='1';
-  button.textContent='水をもどす';
-  status.textContent=finished;
+ let pointerId=null,previousAngle=null;
+ svg.setAttribute('aria-describedby','waterGuide');
+
+ function syncControls() {
+  const progress=activity.waterProgress??0;
+  slider.value=Math.round(progress*180);
+  const message=Math.abs(progress)===1?finished:'';
+  if(status.textContent!==message)status.textContent=message;
  }
- button.onclick=()=>{
-  if(!button.isConnected)return;
-  cancelAnimationFrame(anim);
-  const from=activity.waterProgress||0,to=button.dataset.waterTarget==='1'?0:1;
-  button.dataset.waterTarget=String(to);
-  button.textContent=to?'水をもどす':'水をうつす';
-  status.textContent='';
-  const start=performance.now(),duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:1450*Math.abs(to-from);
-  function tick(now) {
-   if(!button.isConnected||view!=='question'||current()!==q)return;
-   const elapsed=duration?Math.min(1,(now-start)/duration):1;
-   activity.waterProgress=from+(to-from)*elapsed;
-   draw();
-   if(elapsed<1){anim=requestAnimationFrame(tick);return}
-   status.textContent=to?finished:'はじめの水の位置';
-   resize();
-  }
-  anim=requestAnimationFrame(tick);
- };
+
+ function rotateTo(progress) {
+  // Avoid leaving the slider and tanks fractionally short of a half turn.
+  activity.waterProgress=Math.abs(progress)>=1-1e-9?Math.sign(progress):progress;
+  draw();
+  syncControls();
+ }
+
+ function pointerAngle(event) {
+  const bounds=svg.getBoundingClientRect();
+  // The SVG viewBox is centered in the element, including any letterboxing.
+  const dx=event.clientX-bounds.left-bounds.width/2;
+  const dy=event.clientY-bounds.top-bounds.height/2;
+  return Math.hypot(dx,dy)<14?null:Math.atan2(dy,dx);
+ }
+
+ svg.addEventListener('pointerdown',event=>{
+  if(pointerId!==null||event.button!==0)return;
+  const angle=pointerAngle(event);
+  if(angle===null)return;
+  svg.setPointerCapture(event.pointerId);
+  pointerId=event.pointerId;
+  previousAngle=angle;
+  svg.classList.add('rotating');
+ });
+ svg.addEventListener('pointermove',event=>{
+  if(event.pointerId!==pointerId)return;
+  const angle=pointerAngle(event),from=previousAngle;
+  previousAngle=angle;
+  if(angle===null||from===null)return;
+  const delta=Math.atan2(Math.sin(angle-from),Math.cos(angle-from));
+  rotateTo((activity.waterProgress??0)+delta/Math.PI);
+ });
+ function finishDrag(event) {
+  if(event.pointerId!==pointerId)return;
+  pointerId=null;
+  previousAngle=null;
+  svg.classList.remove('rotating');
+  resize();
+ }
+ svg.addEventListener('pointerup',finishDrag);
+ svg.addEventListener('pointercancel',finishDrag);
+ svg.addEventListener('lostpointercapture',finishDrag);
+ slider.oninput=()=>rotateTo(slider.valueAsNumber/180);
+ slider.onchange=()=>resize();
+ syncControls();
 }
 </script>
 """
 FRONTEND = FRONTEND.replace('<script>const CM_STAMP_ART=', WATER_ACTIVITY_HTML+'<script>const CM_STAMP_ART=', 1)
+
+EQUAL_AREA_HTML = r"""<style>
+.diagram.equal-area-diagram { height: clamp(245px, 84vw, 315px); touch-action: none; user-select: none; }
+.equal-area-diagram [data-area-piece], .equal-area-diagram [data-area-turn] { cursor: grab; }
+.equal-area-diagram [data-area-cut] { cursor: pointer; }
+.equal-area-controls { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; }
+.equal-area-controls button { min-height: 44px; }
+.equal-area-controls p { flex-basis: 100%; margin: 0; }
+</style>
+<script>
+function equalAreaControls() {
+ return `<div class="equal-area-controls">
+  <p id="area-work-status" class="quiet" role="status"></p>
+  <button id="area-cut" type="button">点線で切る</button>
+  <button id="area-reset" type="button" disabled>もとにもどす</button>
+ </div>`;
+}
+
+function equalAreaBoard({b,h,s,a}) {
+ const unit=16,x=38,sourceY=34,targetY=178;
+ const source=([px,py])=>[x+unit*px,sourceY+unit*py];
+ const target=([px,py])=>[x+unit*px,targetY+unit*py];
+ let outline,cut,shapes,width,height,rotation=false;
+ if(s!==undefined){
+  outline=[[s,0],[s+b,0],[b,h],[0,h]];
+  cut=[[s,0],[s,h]];
+  shapes=[[[s,0],[s,h],[0,h]],[[s,0],[s+b,0],[b,h],[s,h]]];
+  width=b;
+  height=h;
+ }else{
+  const halfway=(a+b)/2,k=h/2;
+  outline=a===0?[[0,0],[b,h],[0,h]]:[[0,0],[a,0],[b,h],[0,h]];
+  cut=[[0,k],[halfway,k]];
+  shapes=[a===0?[[0,0],[halfway,k],[0,k]]:[[0,0],[a,0],[halfway,k],[0,k]],
+          [[0,k],[halfway,k],[b,h],[0,h]]];
+  width=a+b;
+  height=k;
+  rotation=true;
+ }
+ const pieces=shapes.map((vertices,i)=>{
+  const center=vertices.reduce(([cx,cy],[px,py])=>[cx+px/vertices.length,cy+py/vertices.length],[0,0]);
+  const turn=rotation&&i===0;
+  const goal=rotation?(turn?[width-center[0],height-center[1]]:[center[0],center[1]-height])
+                     :[center[0]+(i===0?b-s:-s),center[1]];
+  return {
+   points:vertices.map(([px,py])=>[(px-center[0])*unit,(py-center[1])*unit]),
+   start:source(center),goal:target(goal),turn
+  };
+ });
+ return {outline:outline.map(source),cut:cut.map(source),pieces,
+         frame:[[0,0],[width,0],[width,height],[0,height]].map(target)};
+}
+
+function areaPieceOffsets(piece,angle) {
+ const c=Math.cos(angle),s=Math.sin(angle);
+ return piece.points.map(([x,y])=>[x*c-y*s,x*s+y*c]);
+}
+
+function drawEqualArea(q,svg) {
+ const work=activity.equalArea??={board:equalAreaBoard(q.params),pieces:null,selected:null};
+ const {board,pieces}=work;
+ const coords=points=>points.map(p=>p.join(',')).join(' ');
+ const polygon=(pts,attrs)=>`<polygon points="${coords(pts)}" ${attrs}/>`;
+ svg.classList.add('equal-area-diagram');
+ svg.setAttribute('viewBox','0 0 320 284');
+ const matched=pieces?.every(piece=>piece.placed);
+ let figures=`<defs><pattern id="equal-area-grid" x="38" y="34" width="16" height="16" patternUnits="userSpaceOnUse">
+   <path d="M16 0H0V16" fill="none" stroke="#d2e2eb" stroke-width="1"/>
+  </pattern></defs>
+  <path d="M14 30H306V135H14ZM14 174H306V278H14Z" fill="url(#equal-area-grid)"/>
+  <text x="16" y="21" style="fill:#245367;font-weight:750">A　もとの図形</text>
+  <text x="16" y="165" style="fill:#245367;font-weight:750">B　くらべる図形</text>`;
+ figures+=polygon(board.frame,`fill="#e4f0f3" fill-opacity=".6" stroke="${matched?'#167652':'#427285'}" stroke-width="2.4" pointer-events="none"`);
+ if(!pieces){
+  const [p1,p2]=board.cut;
+  const line=`x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${p2[1]}"`;
+  figures+=polygon(board.outline,'fill="#a8dce5" fill-opacity=".66" stroke="#2b6576" stroke-width="2"');
+  figures+=`<line ${line} stroke="#684628" stroke-width="2" stroke-dasharray="5 4"/>
+   <line ${line} data-area-cut="" stroke="transparent" stroke-width="30"/>`;
+ }else{
+  figures+=polygon(board.outline,'fill="none" stroke="#87a3af" stroke-dasharray="4 3" stroke-width="1.5" pointer-events="none"');
+  const order=work.selected===0?[1,0]:[0,1];
+  for(const i of order){
+   const piece=board.pieces[i],state=pieces[i];
+   const points=areaPieceOffsets(piece,state.angle).map(([x,y])=>[x+state.x,y+state.y]);
+   const color=i===0?'#f6ba72':'#8fd2df';
+   const edge=i===0?'#96581e':'#266677';
+   figures+=polygon(points,`fill="${color}" fill-opacity=".75" stroke="${edge}" stroke-width="${i===work.selected?3:2}"
+      ${state.placed?'pointer-events="none"':`data-area-piece="${i}"`}`);
+  }
+  const selected=board.pieces[work.selected],state=pieces[work.selected];
+  if(selected?.turn&&!state.placed){
+   const handleY=Math.max(15,state.y-33);
+   figures+=`<line x1="${state.x}" y1="${state.y}" x2="${state.x}" y2="${handleY}" stroke="#895317" stroke-width="2" pointer-events="none"/>
+    <circle cx="${state.x}" cy="${handleY}" r="13" fill="#fff7e6" stroke="#895317" stroke-width="2" pointer-events="none"/>
+    <text x="${state.x}" y="${handleY+5}" text-anchor="middle" style="fill:#895317;font-size:17px" pointer-events="none">↻</text>
+    <circle cx="${state.x}" cy="${handleY}" r="20" fill="transparent" data-area-turn="" />`;
+  }
+ }
+ svg.innerHTML=figures;
+}
+
+function setupEqualArea() {
+ const svg=$('#diagram'),cut=$('#area-cut'),reset=$('#area-reset'),status=$('#area-work-status');
+ let drag=null;
+ const clamp=(x,lo,hi)=>Math.min(hi,Math.max(lo,x));
+ function sync() {
+  const work=activity.equalArea,pieces=work.pieces;
+  cut.disabled=!!pieces;
+  reset.disabled=!pieces;
+  const rotating=work.board.pieces[0].turn&&!pieces?.[0].placed;
+  const message=!pieces?'点線をさわって切ろう。':pieces.every(piece=>piece.placed)?'ぴったり重なった！'
+     :rotating?'オレンジのピースは ↻ を指で動かして回せるよ。2つのピースをBへ。'
+     :'2つのピースを指でBのわくへ運ぼう。';
+  if(status.textContent!==message)status.textContent=message;
+ }
+ function cutShape() {
+  const work=activity.equalArea;
+  if(work.pieces)return;
+  work.pieces=work.board.pieces.map(({start:[x,y]})=>({x,y,angle:0,placed:false}));
+  work.selected=work.board.pieces[0].turn?0:null;
+  draw();
+  sync();
+  resize();
+ }
+ function localPoint(event) {
+  return new DOMPoint(event.clientX,event.clientY).matrixTransform(svg.getScreenCTM().inverse());
+ }
+ cut.onclick=cutShape;
+ reset.onclick=()=>{
+  if(drag&&svg.hasPointerCapture(drag.id))svg.releasePointerCapture(drag.id);
+  drag=null;
+  delete activity.equalArea;
+  draw();
+  sync();
+  resize();
+ };
+ svg.addEventListener('pointerdown',event=>{
+  if(drag||event.button!==0)return;
+  if(event.target.hasAttribute('data-area-cut')){
+   cutShape();
+   return;
+  }
+  const work=activity.equalArea,turn=event.target.hasAttribute('data-area-turn');
+  const index=turn?work.selected:Number(event.target.getAttribute('data-area-piece'));
+  if(!turn&&!event.target.hasAttribute('data-area-piece'))return;
+  const state=work.pieces[index],point=localPoint(event);
+  svg.setPointerCapture(event.pointerId);
+  drag={id:event.pointerId,index,turn,x:point.x,y:point.y,origin:{...state}};
+  work.selected=index;
+  draw();
+ });
+ svg.addEventListener('pointermove',event=>{
+  if(drag?.id!==event.pointerId)return;
+  const work=activity.equalArea,state=work.pieces[drag.index],piece=work.board.pieces[drag.index];
+  const point=localPoint(event),start=drag.origin;
+  if(drag.turn){
+   if(Math.hypot(point.x-state.x,point.y-state.y)<8)return;
+   const initial=Math.atan2(drag.y-state.y,drag.x-state.x);
+   state.angle=start.angle+Math.atan2(point.y-state.y,point.x-state.x)-initial;
+  }else{
+   const offsets=areaPieceOffsets(piece,state.angle);
+   const xs=offsets.map(([x])=>x),ys=offsets.map(([,y])=>y);
+   state.x=clamp(start.x+point.x-drag.x,5-Math.min(...xs),315-Math.max(...xs));
+   state.y=clamp(start.y+point.y-drag.y,5-Math.min(...ys),279-Math.max(...ys));
+  }
+  draw();
+ });
+ function finish(event) {
+  if(drag?.id!==event.pointerId)return;
+  const work=activity.equalArea,state=work.pieces[drag.index],piece=work.board.pieces[drag.index];
+  drag=null;
+  const angle=piece.turn?Math.PI:0,[x,y]=piece.goal;
+  const gap=Math.atan2(Math.sin(state.angle-angle),Math.cos(state.angle-angle));
+  if(event.type==='pointerup'&&Math.hypot(state.x-x,state.y-y)<=11&&Math.abs(gap)<=Math.PI/14){
+   Object.assign(state,{x,y,angle,placed:true});
+   work.selected=null;
+   draw();
+   sync();
+   resize();
+  }
+ }
+ for(const type of ['pointerup','pointercancel','lostpointercapture'])svg.addEventListener(type,finish);
+ sync();
+}
+</script>
+"""
+FRONTEND = FRONTEND.replace('<script>const CM_STAMP_ART=',EQUAL_AREA_HTML+'<script>const CM_STAMP_ART=',1)
+FRONTEND = FRONTEND.replace("'beginner_lab','water_transfer'","'beginner_lab','water_transfer','equal_area_pieces'")
+FRONTEND = FRONTEND.replace('function playControls(q){','function playControls(q){if(learningInteraction(q)===\'equal_area_pieces\')return equalAreaControls();',1)
+FRONTEND = FRONTEND.replace('function drawCourse(q,svg,w){','function drawCourse(q,svg,w){if(learningInteraction(q)===\'equal_area_pieces\'){drawEqualArea(q,svg);return}',1)
+FRONTEND = FRONTEND.replace("if(learningInteraction(q)==='water_transfer')setupWaterControls(q)","if(learningInteraction(q)==='water_transfer')setupWaterControls(q);if(learningInteraction(q)==='equal_area_pieces')setupEqualArea()",1)
 
 
 
@@ -668,7 +897,7 @@ LEARNING_PLANS = {
  'euler':('invariant_proof','inspect','凸多面体で頂点−辺＋面が一定になる','多面体のつながり・頂点数・辺数'),
 }
 LEARNING_PLANS.update({family:(cat,'beginner_lab',discovery,'問題に指定された形・長さ・個数') for family,(cat,discovery,operation) in BEGINNER_LABS.items()})
-SUPPORTED_INTERACTIONS={'beginner_lab','static','inspect','sides','right_corner','equal_sides','circle','perimeter','compose','solid','fold_match','motion','diagonal','lshape','apex','cross','water_transfer'}
+SUPPORTED_INTERACTIONS={'beginner_lab','static','inspect','sides','right_corner','equal_sides','circle','perimeter','compose','solid','fold_match','motion','diagonal','lshape','apex','cross','water_transfer','equal_area_pieces'}
 
 
 def attach_learning_plan(q):
@@ -681,6 +910,10 @@ def attach_learning_plan(q):
     operation=play_instruction(q) if kind not in ('inspect','lshape') else ('くぼみの点を下にドラッグまたは補助線ボタンで長方形2つに分割。左右の領域を選択し、足りない辺の長さを確認できる。全体を回転する操作はない。' if kind=='lshape' else '考え方を確認するボタンで、解法に対応する補助線・色分け・関係を段階的に確認できる。図形や頂点を動かす操作はない。')
     if kind=='beginner_lab':operation=BEGINNER_LABS[q['family']][2]
     if kind=='water_transfer':operation='水をうつすボタンで板を回し、同じ深さの入れ物の水を移す。水をもどすボタンで逆向きに移す。'
+    if kind=='equal_area_pieces':
+        operation='図形Aの点線を押して切り、2つのピースを図形Bの枠へドラッグする。'
+        if 'a' in q['params']:
+            operation+='オレンジのピースは回転マークをドラッグして半回転させる。'
     q['learning']={'category':category,'goal':q['skill'],'interaction':kind,'operation':operation,'discovery':discovery,'invariants':[preserve],'hint_steps':[{'text':v,'focus':q['action']} for v in q['hints']]}
     validate_learning_plan(q)
 
@@ -996,6 +1229,56 @@ def geometry_water_lessons():
 
 BANK.extend(geometry_water_lessons())
 BY_ID.update({q['id']:q for q in BANK if q['family']=='pythagoras_water'})
+_water_button_version,_water_button_catalog,_=cm_build_catalog(BANK,4)
+CM_CATALOG_HISTORY+=_water_button_catalog
+CM_CATALOG_RELEASES.append((_water_button_version,_water_button_catalog))
+CM_QUESTION_VERSIONS[_water_button_version]={
+    e['entry_id']:e['payload'] for e in _water_button_catalog if e['entry_type']=='question'
+}
+for q in BANK:
+    if q['family']=='pythagoras_water':
+        q['learning']={**q['learning'],'operation':'図を指やマウスでつかんで半回転させるか、バーを動かすと、水が移る。途中で止めたり逆向きに回したりできる。'}
+CM_CONTENT_VERSION,CM_CATALOG,CM_META=cm_build_catalog(BANK,4)
+CM_QUESTIONS={e['entry_id']:e['payload'] for e in CM_CATALOG if e['entry_type']=='question'}
+CM_CATALOG_HISTORY+=CM_CATALOG
+CM_CATALOG_RELEASES.append((CM_CONTENT_VERSION,CM_CATALOG))
+CM_QUESTION_VERSIONS[CM_CONTENT_VERSION]=CM_QUESTIONS
+
+
+def geometry_equal_area_lessons():
+    discovery='切ったピースを移動や回転で組み直し、重なりやすき間なく一致すれば面積は同じ'
+    cases=(
+        ('foundation','equal_area_slide','平行四辺形',dict(b=6,h=4,s=2)),
+        ('foundation','equal_area_slide','平行四辺形',dict(b=7,h=5,s=3)),
+        ('foundation','equal_area_slide','平行四辺形',dict(b=8,h=4,s=3)),
+        ('intermediate','equal_area_turn','台形',dict(a=3,b=7,h=6)),
+        ('intermediate','equal_area_turn','台形',dict(a=4,b=8,h=4)),
+        ('intermediate','equal_area_triangle','三角形',dict(a=0,b=9,h=6)),
+    )
+    for n,(level,family,shape,params) in enumerate(cases):
+        LEARNING_PLANS[family]=('area_decomposition','equal_area_pieces',discovery,'切った各ピースの形と面積')
+        slide=level=='foundation'
+        steps=['Aの点線をさわって、2つのピースに分けよう。']
+        steps.append('オレンジの三角形をBの右側へ。水色のピースをBの左側へ動かそう。' if slide else
+                     '水色をBの左側へ。オレンジの回転マークを半周動かし、向きを変えてBの右側へ運ぼう。')
+        steps.append('2つを動かして、Bのわくに重なりやすき間なく入るか確かめよう。')
+        choices=['Aのほうが大きい','同じ面積','Bのほうが大きい']
+        shift=n%len(choices)
+        title=f'{shape}と長方形の面積くらべ'
+        q=dict(id=f'course_{family}_{n}',course=True,topic=level,level=level,family=family,skill=title,
+               prompt=f'Aの{shape}とBの長方形。どちらの面積が大きい？',
+               choices=choices[shift:]+choices[:shift],answer=(1-shift)%len(choices),
+               explanation='Aを切ったピースが、重なりもすき間もなくBにぴったり入ります。ピースの面積は動かしたり回したりしても変わらないので、AとBの面積は同じです。',
+               params=params,visual='equal_area_pieces',ui='reveal',hints=steps,action='点線で切って動かす',
+               alt=f'Aは{shape}。Bは同じ目盛りの長方形。Aには切るための点線があります。',
+               bridge=LEVELS[level]['bridge'])
+        attach_learning_plan(q)
+        yield q
+
+
+_equal_area_questions=list(geometry_equal_area_lessons())
+BANK.extend(_equal_area_questions)
+BY_ID.update({q['id']:q for q in _equal_area_questions})
 CM_CONTENT_VERSION,CM_CATALOG,CM_META=cm_build_catalog(BANK,4)
 CM_QUESTIONS={e['entry_id']:e['payload'] for e in CM_CATALOG if e['entry_type']=='question'}
 CM_CATALOG_HISTORY+=CM_CATALOG
