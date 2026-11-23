@@ -89,9 +89,9 @@ function drawSharedSolid(q,svg,w){
  const axis=s.solidHint==='direction'?s.solidAxis:-1;
  svg.setAttribute('role','group');
  svg.style.height='320px';
- svg.style.touchAction='none';
+ svg.style.touchAction='pan-y';
  svg.setAttribute('viewBox',`0 0 ${w} 320`);
- const caption=split?'すき間をひらいて、棒を1本ずつ見よう':'つかんで回す・棒を押して印をつける';
+ const caption=split?'すき間をひらいて、棒を1本ずつ見よう':'棒を押して、数えた印をつけよう';
  let out=`<text x="${w/2}" y="20" text-anchor="middle" font-size="13">${caption}</text>`;
  const dimmed=[],active=[];
  for(const e of edges){
@@ -110,35 +110,39 @@ function drawSharedSolid(q,svg,w){
  const status=$('#labStatus');
  const count=axis===-1?s.marks.length:s.marks.filter(id=>id.startsWith(axis+':')).length;
  const label=axis===-1?'数えた棒':sharedSolidLabels[axis]+'で数えた棒';
- const statusText=label+'：'+count+'本。'+(axis===-1&&!split?'奥の棒も回してたしかめよう。':'');
+ const statusText=label+'：'+count+'本。';
  if(status&&status.textContent!==statusText)status.textContent=statusText;
 }
 
-function setupSharedSolidHints(q,svg,s){
- const panel=$('#assistPanel'),toggle=$('#thinkingHelp');
- panel.removeAttribute('aria-live');
- panel.setAttribute('role','group');
- panel.setAttribute('aria-label','棒を数えるヒント');
- panel.innerHTML=`
-  <div class="controls">
-   <button type="button" data-solid-hint="split" aria-pressed="false">少し離して見る</button>
-   <button type="button" data-solid-hint="direction" aria-pressed="false">色ごとに数える</button>
+function sharedSolidControls(){
+ return `<div id="sharedSolidControls" class="solid-tools" role="group" aria-label="棒の数え方">
+  <div class="solid-buttons">
+   <button type="button" data-solid-hint="split" aria-pressed="false" aria-controls="solidSplitHint">少し離して見る</button>
+   <button type="button" data-solid-hint="direction" aria-pressed="false" aria-controls="solidDirectionHint">色ごとに数える</button>
+   <button type="button" id="labReset">もとに戻す</button>
+  </div>
+  <div id="solidSplitHint" hidden>
+   <p class="quiet">となりと共通の棒も1本と数えよう。</p>
+   <div class="solid-slider">
+    <label for="solidSplitAmount">離すきょり</label>
+    <input id="solidSplitAmount" type="range" min="0" max="100" value="0">
+    <button type="button" id="solidSplitPlay">少し離す</button>
+   </div>
   </div>
   <div id="solidDirectionHint" hidden>
-   <p>色をえらんで、同じ色の棒を1本ずつ押そう。3つの色で数えた本数を足そう。</p>
-   <div class="controls">
+   <p class="quiet">色をえらんで棒を数え、3つの色の本数を足そう。</p>
+   <div class="solid-buttons">
     <button type="button" data-solid-axis="-1" aria-pressed="true">ぜんぶ</button>
     ${sharedSolidLabels.map((label,axis)=>`<button type="button" data-solid-axis="${axis}" aria-pressed="false"><span aria-hidden="true" style="color:${sharedSolidColors[axis]}">●</span> ${label}</button>`).join('')}
    </div>
   </div>
-  <div id="solidSplitHint" hidden>
-   <p>すき間の近くにある、となりと共通の棒も1本だけ。押して数えよう。</p>
-   <div class="controls">
-    <label for="solidSplitAmount">離すきょり</label>
-    <input class="range" id="solidSplitAmount" type="range" min="0" max="100" value="0">
-    <button type="button" id="solidSplitPlay">つなげる</button>
-   </div>
-  </div>`;
+  <div id="labStatus" class="quiet" aria-live="polite"></div>
+ </div>`;
+}
+
+function setupSharedSolidHints(q,svg,s){
+ const panel=$('#sharedSolidControls');
+ $('#thinkingHelp').closest('.thinking-tools').hidden=true;
  const hintButtons=[...panel.querySelectorAll('[data-solid-hint]')];
  const axisButtons=[...panel.querySelectorAll('[data-solid-axis]')];
  const range=$('#solidSplitAmount'),play=$('#solidSplitPlay');
@@ -165,53 +169,38 @@ function setupSharedSolidHints(q,svg,s){
   };
   anim=requestAnimationFrame(frame);
  };
+ const selectAxis=axis=>{
+  s.solidAxis=axis;
+  for(const button of axisButtons)button.setAttribute('aria-pressed',String(Number(button.dataset.solidAxis)===axis));
+ };
  const selectHint=mode=>{
-  if(mode===s.solidHint)return;
+  if(mode&&mode===s.solidHint)return;
   cancelAnimationFrame(anim);
   s.solidHint=mode;
   s.solidGap=0;
   for(const button of hintButtons)button.setAttribute('aria-pressed',String(button.dataset.solidHint===mode));
   $('#solidDirectionHint').hidden=mode!=='direction';
   $('#solidSplitHint').hidden=mode!=='split';
-  usedHint=true;
-  const step=mode==='split'?1:2;
-  geometryLearning.support('hint',step,'shared-sticks:'+mode,'visual');
-  geometryLearning.phase('thinking');
-  if(mode==='split'){
-   showGap(0);
-   animateGap(sharedSolidMaxGap);
-  }else draw();
-  resize();
- };
- const showPanel=()=>{
-  panel.hidden=false;
-  toggle.textContent='考え方を閉じる';
-  toggle.setAttribute('aria-expanded','true');
-  selectHint('split');
- };
- toggle.onclick=()=>{
-  if(checked)return;
-  if(panel.hidden){showPanel();return;}
-  cancelAnimationFrame(anim);
-  s.solidHint=null;
-  s.solidGap=0;
-  panel.hidden=true;
-  toggle.textContent='考え方を確認する';
-  toggle.setAttribute('aria-expanded','false');
+  if(mode){
+   usedHint=true;
+   const step=mode==='split'?1:2;
+   geometryLearning.support('hint',step,'shared-sticks:'+mode,'visual');
+   geometryLearning.phase('thinking');
+  }
   draw();
-  resize();
- };
- $('#help').onclick=()=>{
-  if(checked)return;
-  if(panel.hidden)showPanel();
-  $('#help').hidden=true;
+  if(mode==='split')animateGap(sharedSolidMaxGap);
   resize();
  };
  for(const button of hintButtons)button.onclick=()=>selectHint(button.dataset.solidHint);
  for(const button of axisButtons)button.onclick=()=>{
-  s.solidAxis=Number(button.dataset.solidAxis);
-  for(const other of axisButtons)other.setAttribute('aria-pressed',String(other===button));
+  selectAxis(Number(button.dataset.solidAxis));
   draw();
+ };
+ $('#labReset').onclick=()=>{
+  s.marks=[];
+  selectAxis(-1);
+  selectHint(null);
+  labObserve();
  };
  range.oninput=()=>{
   cancelAnimationFrame(anim);
@@ -220,15 +209,52 @@ function setupSharedSolidHints(q,svg,s){
  };
  play.onclick=()=>animateGap(play.textContent==='つなげる'?0:sharedSolidMaxGap);
 }
-function setupSharedSolid(q,svg){const s=labState();let drag=null;const mark=id=>{const i=s.marks.indexOf(id);if(i<0)s.marks.push(id);else s.marks.splice(i,1);draw();labObserve()};svg.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw:s.yaw,pitch:s.pitch,edge:e.target.closest('[data-solid-edge]')?.dataset.solidEdge,moved:false};svg.setPointerCapture(e.pointerId);e.preventDefault()});svg.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.hypot(dx,dy)>6)drag.moved=true;if(drag.moved){s.yaw=drag.yaw+dx*.012;s.pitch=Math.max(-1.15,Math.min(1.15,drag.pitch+dy*.01));draw()}});const end=e=>{if(!drag)return;if(!drag.moved&&drag.edge)mark(drag.edge);else labObserve();drag=null;if(svg.hasPointerCapture?.(e.pointerId))svg.releasePointerCapture(e.pointerId)};svg.addEventListener('pointerup',end);svg.addEventListener('pointercancel',()=>{drag=null});svg.addEventListener('keydown',e=>{const id=e.target.closest('[data-solid-edge]')?.dataset.solidEdge;if(id&&(e.key===' '||e.key==='Enter')){e.preventDefault();mark(id);svg.querySelector(`[data-solid-edge="${id}"]`)?.focus()}});for(const [id,fn]of Object.entries({labLeft:()=>s.yaw-=Math.PI/8,labRight:()=>s.yaw+=Math.PI/8,labUp:()=>s.pitch=Math.min(1.15,s.pitch+.2),labDown:()=>s.pitch=Math.max(-1.15,s.pitch-.2),labReset:()=>{s.marks=[];s.yaw=.65;s.pitch=.35}}))if($('#'+id))$('#'+id).onclick=()=>{fn();draw();labObserve()};
+function setupSharedSolid(q,svg){
+ const s=labState();
+ let press=null;
+ const mark=id=>{
+  const i=s.marks.indexOf(id);
+  if(i<0)s.marks.push(id);
+  else s.marks.splice(i,1);
+  draw();
+  labObserve();
+ };
+ svg.addEventListener('pointerdown',e=>{
+  const id=e.target.closest('[data-solid-edge]')?.dataset.solidEdge;
+  if(id&&e.isPrimary&&e.button===0)press={id,x:e.clientX,y:e.clientY,pointer:e.pointerId};
+ });
+ svg.addEventListener('pointerup',e=>{
+  if(press?.pointer!==e.pointerId)return;
+  const {id,x,y}=press;
+  press=null;
+  if(Math.hypot(e.clientX-x,e.clientY-y)<=8)mark(id);
+ });
+ svg.addEventListener('pointercancel',e=>{if(press?.pointer===e.pointerId)press=null;});
+ svg.addEventListener('keydown',e=>{
+  const id=e.target.closest('[data-solid-edge]')?.dataset.solidEdge;
+  if(!id||(e.key!==' '&&e.key!=='Enter'))return;
+  e.preventDefault();
+  mark(id);
+  svg.querySelector(`[data-solid-edge="${id}"]`)?.focus();
+ });
  setupSharedSolidHints(q,svg,s);
  draw();
 }
 
+
 """
 FRONTEND = FRONTEND.replace('/* SHARED_SOLID_ACTIVITY */', SHARED_SOLID_ACTIVITY_JS, 1)
+FRONTEND = FRONTEND.replace('function beginnerControls(q){',
+    "function beginnerControls(q){if(q.family==='shared_sticks')return sharedSolidControls();", 1)
 FRONTEND = FRONTEND.replace('</head>', '''
 <style>
+.solid-tools { display: grid; gap: 6px; }
+.solid-buttons, .solid-slider { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.solid-tools button { min-height: 44px; padding: 6px 10px; font-size: 13px; }
+.solid-tools p { margin: 5px 0; }
+.solid-slider { flex-wrap: nowrap; }
+.solid-slider label, .solid-slider button { flex: none; font-size: 13px; }
+.solid-slider input { flex: 1; min-width: 0; width: auto; height: 36px; margin: 0; accent-color: #197f73; }
 [data-solid-hint][aria-pressed="true"], [data-solid-axis][aria-pressed="true"] {
  border-color: #197f73;
  background: #edf6f3;
@@ -1380,8 +1406,8 @@ def geometry_concrete_manipulations(bank):
             else:candidates=[total,total+4,total-4,nx*ny*nz*12]
             q['choices']=list(dict.fromkeys(candidates));q['answer']=0
             hints=['立方体を少し離し、すき間の近くの棒を1本ずつ見よう。','きいろ（横）・あお（奥）・むらさき（高さ）に分けて棒に印を付けよう。','となりの立方体と同じ棒は1本だけ。色ごとの本数を足そう。'];q['hints']=hints
-            q['action']='立体を回して棒を数える';q['control']='立体をつかんで回し、数えた棒を押そう'
-            q['learning'].update(operation='立体をドラッグまたは回転ボタンで回し、棒をタップして印を付ける。共有する棒は1本として扱う。',discovery='立方体の棒の合計では共有する棒を重ねて数える。3つの向きに分けて数える。',invariants=['棒の総数','共有する棒は1本'],hint_steps=[dict(text=h,focus='立体の横・奥・高さの棒') for h in hints])
+            q['action']='棒を離したり色を選んだりして数える';q['control']='図の下で離すきょりや色を選び、数えた棒を押そう'
+            q['learning'].update(operation='図の下の操作で立方体を少し離したり色ごとに棒を強調したりする。棒をタップして印を付け、共有する棒は1本として扱う。',discovery='立方体の棒の合計では共有する棒を重ねて数える。3つの向きに分けて数える。',invariants=['棒の総数','共有する棒は1本'],hint_steps=[dict(text=h,focus='立体の横・奥・高さの棒') for h in hints])
         updated.append(q)
     return updated
 BANK=geometry_concrete_manipulations(BANK)
